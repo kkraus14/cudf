@@ -17,6 +17,7 @@ from cudf.dataframe.column import Column
 from cudf.utils import utils, cudautils
 from cudf import _gdf
 from cudf.utils.utils import buffers_from_pyarrow
+import cudf.bindings.copying as cpp_copying
 
 import warnings
 
@@ -139,23 +140,26 @@ def column_select_by_boolmask(column, boolmask):
 
 
 def column_select_by_position(column, positions):
-    """Select by a series of dtype int64 indicating positions.
+    """Select by a series of dtype int32 indicating positions.
 
     Returns (selected_column, selected_positions)
     """
-    from cudf.dataframe.numerical import NumericalColumn
+    # from cudf.dataframe.numerical import NumericalColumn
 
-    assert column.null_count == 0
+    # assert column.null_count == 0
 
     # TODO replace by `apply_gather_array`
     # this is tested by `test_series_indexing`
-    selvals = cudautils.gather(column.data.to_gpu_array(),
-                               positions.data.to_gpu_array())
-    selected_values = column.replace(data=Buffer(selvals))
-    selected_index = Buffer(positions.data.to_gpu_array())
+    # selvals = cudautils.gather(column.data.to_gpu_array(),
+    #                            positions.data.to_gpu_array())
+    # selected_values = column.replace(data=Buffer(selvals))
+    # selected_index = Buffer(positions.data.to_gpu_array())
 
-    return selected_values, NumericalColumn(data=selected_index,
-                                            dtype=selected_index.dtype)
+    # return selected_values, NumericalColumn(data=selected_index,
+    #                                         dtype=selected_index.dtype)
+    indices = positions.data.to_gpu_array()
+    indices = cudautils.astype(indices, np.int32)
+    return cpp_copying.apply_gather_column(column, indices)
 
 
 def build_column(buffer, dtype, mask=None, categories=None):

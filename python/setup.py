@@ -20,7 +20,8 @@ extensions = [
               sources=cython_files,
               include_dirs=[
                 '../cpp/include/',
-                '../cpp/thirdparty/dlpack/include/dlpack/'
+                '../cpp/thirdparty/dlpack/include/dlpack/',
+                '/usr/local/cuda/include'
               ],
               library_dirs=[get_python_lib()],
               libraries=['cudf'],

@@ -93,16 +93,20 @@ class TypedColumnBase(Column):
         raise NotImplementedError
 
 
-def column_empty_like(row_count, dtype, masked):
+def column_empty_like(row_count, dtype, masked, categories=None):
     """Allocate a new column like the given row_count and dtype.
     """
-    data = rmm.device_array(shape=row_count, dtype=dtype)
-    params = dict(data=Buffer(data))
+    buffer_dtype = dtype
+    if pd.api.types.is_categorical_dtype(dtype):
+        buffer_dtype = np.int8
+        if categories is None:
+            categories = ()
+    data = Buffer(rmm.device_array(shape=row_count, dtype=buffer_dtype))
+    mask = None
     if masked:
         mask = utils.make_mask(row_count)
         cudautils.fill_value(mask, 0)
-        params.update(dict(mask=Buffer(mask), null_count=data.size))
-    return Column(**params)
+    return build_column(data, dtype, mask=mask, categories=categories)
 
 
 def column_empty_like_same_mask(column, dtype):
@@ -113,11 +117,16 @@ def column_empty_like_same_mask(column, dtype):
     dtype : np.dtype like
         The dtype of the data buffer.
     """
-    data = rmm.device_array(shape=len(column), dtype=dtype)
-    params = dict(data=Buffer(data))
+    buffer_dtype = dtype
+    categories = None
+    if pd.api.types.is_categorical_dtype(dtype):
+        buffer_dtype = column.cat().codes.dtype
+        categories = column.cat().categories
+    data = Buffer(rmm.device_array(shape=len(column), dtype=buffer_dtype))
+    mask = None
     if column.has_null_mask:
-        params.update(mask=column.nullmask)
-    return Column(**params)
+        mask = column.nullmask
+    return build_column(data, dtype, mask=mask, categories=categories)
 
 
 def column_select_by_boolmask(column, boolmask):
@@ -144,7 +153,7 @@ def column_select_by_position(column, positions):
 
     Returns (selected_column, selected_positions)
     """
-    # from cudf.dataframe.numerical import NumericalColumn
+    from cudf.dataframe.numerical import NumericalColumn
 
     # assert column.null_count == 0
 
@@ -159,21 +168,23 @@ def column_select_by_position(column, positions):
     #                                         dtype=selected_index.dtype)
     indices = positions.data.to_gpu_array()
     indices = cudautils.astype(indices, np.int32)
-    return cpp_copying.apply_gather_column(column, indices)
+    selected_values = cpp_copying.apply_gather_column(column, indices)
+    selected_indices = NumericalColumn(data=Buffer(indices), dtype=indices.dtype)
+    return selected_values, selected_indices
 
 
 def build_column(buffer, dtype, mask=None, categories=None):
     from cudf.dataframe import numerical, categorical, datetime, string
-    if np.dtype(dtype).type == np.datetime64:
-        return datetime.DatetimeColumn(data=buffer,
-                                       dtype=np.dtype(dtype),
-                                       mask=mask)
-    elif pd.api.types.is_categorical_dtype(dtype):
+    if pd.api.types.is_categorical_dtype(dtype):
         return categorical.CategoricalColumn(data=buffer,
                                              dtype='categorical',
                                              categories=categories,
                                              ordered=False,
                                              mask=mask)
+    elif np.dtype(dtype).type == np.datetime64:
+        return datetime.DatetimeColumn(data=buffer,
+                                       dtype=np.dtype(dtype),
+                                       mask=mask)
     elif np.dtype(dtype).type in (np.object_, np.str_):
         if not isinstance(buffer, nvstrings.nvstrings):
             raise TypeError

@@ -52,9 +52,13 @@ def clone_columns_with_size(in_cols, row_size):
     from cudf.dataframe import columnops
     out_cols = []
     for col in in_cols:
+        categories = None
+        if pd.api.types.is_categorical_dtype(col.dtype):
+            categories = col.cat().categories
         o_col = columnops.column_empty_like(row_size,
                                        dtype = col.dtype,
-                                       masked = col.has_null_mask)
+                                       masked = col.has_null_mask,
+                                       categories=categories)
         out_cols.append(o_col)
 
     return out_cols

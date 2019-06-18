@@ -8,7 +8,6 @@
 from cudf.bindings.cudf_cpp cimport *
 from cudf.bindings.cudf_cpp import *
 from cudf.bindings.types cimport table as cudf_table
-from cudf.bindings.types import *
 from cudf.utils.cudautils import astype
 from librmm_cffi import librmm as rmm
 

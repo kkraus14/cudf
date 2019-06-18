@@ -112,6 +112,8 @@ class Groupby(object):
         self._by = [by] if isinstance(by, str) else list(by)
         self._val_columns = [idx for idx in self._df.columns
                              if idx not in self._by]
+        self._sorted_df = None
+        self._segs = None
 
     def serialize(self, serialize):
         header = {
@@ -125,6 +127,18 @@ class Groupby(object):
         by = header['by']
         df = deserialize(header['df'], frames)
         return Groupby(df, by)
+
+    @property
+    def sorted_df(self):
+        if self._sorted_df is None:
+            self._sorted_df, self._segs = cpp_group_dataframe(self)
+        return self._sorted_df
+
+    @property
+    def segs(self):
+        if self._segs is None:
+            self._sorted_df, self._segs = cpp_group_dataframe(self)
+        return self._segs
 
     def __iter__(self):
         return self._group_iterator()

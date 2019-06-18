@@ -31,3 +31,15 @@ cdef extern from "table.hpp" namespace "cudf" nogil:
 #        gdf_column const* const* end() const
 #        gdf_column const* get_column(gdf_index_type index) const except +
 
+
+# Temporary until we properly wrap RMM in Cython
+cdef extern from "rmm/thrust_rmm_allocator.h" nogil:
+
+    ctypedef size_t size_type
+
+    cdef cppclass device_ptr[T]:
+        T* get() except +
+
+    cdef cppclass device_vector[T]:
+        device_ptr[T] data() except +
+        size_type size() except +

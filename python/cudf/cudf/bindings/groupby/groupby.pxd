@@ -7,13 +7,12 @@
 
 from cudf.bindings.cudf_cpp cimport *
 from cudf.bindings.types cimport table as cudf_table
-from cudf.bindings.types cimport device_vector
 from libcpp.pair cimport pair
 
 
 cdef extern from "groupby.hpp" nogil:
 
-    cdef pair[cudf_table, device_vector*] gdf_group_by_without_aggregations(
+    cdef pair[cudf_table, gdf_column] gdf_group_by_without_aggregations(
         const cudf_table& input_table,
         gdf_size_type num_key_cols,
         const gdf_index_type* key_col_indices,

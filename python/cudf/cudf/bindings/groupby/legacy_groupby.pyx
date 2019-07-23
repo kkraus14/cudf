@@ -9,6 +9,7 @@
 
 from cudf.bindings.cudf_cpp cimport *
 from cudf.bindings.cudf_cpp import *
+from cudf.bindings.utils cimport dataframe_from_table
 from libc.stdint cimport uintptr_t
 from libc.stdlib cimport free
 from libcpp.vector cimport vector
@@ -106,23 +107,20 @@ def cpp_group_dataframe(self, levels):
 
     # Perform grouping
     with nogil:
-        cdef pair[cudf_table, device_vector*] c_result = gdf_group_by_without_aggregations(  # noqa: E501
-            <cudf_table&> c_input_table[0],
-            <gdf_size_type> c_num_key_cols,
-            <gdf_index_type*> c_key_col_indices.data(),
-            <gdf_context*> c_context
+        cdef pair[cudf_table, gdf_column] c_result = gdf_group_by_without_aggregations(  # noqa: E501
+            <cudf_table&>c_input_table[0],
+            <gdf_size_type>c_num_key_cols,
+            <gdf_index_type*>c_key_col_indices.data(),
+            <gdf_context*>c_context
         )
 
     # Convert libcudf objects to Python objects
     cdef cudf_table c_out_table = c_result.first
-    cdef gdf_column* c_tmp_col = NULL
-    out_df = cudf.DataFrame()
-    for idx, colname in enumerate(input_columns):
-        out_df[colname] =
+    out_df = dataframe_from_table(&c_out_table)
 
-    # Jake is changing this to return a std::unique_ptr that I'll have to
-    # release and later
-    cdef device_vector* c_out_segments = c_result.second
+    cdef gdf_column c_out_segments = c_result.second
+    data, mask = gdf_column_to_column_mem(&c_out_segments)
+    segs = Series(Column.from_mem_views(data, mask, c_out_segments.null_count))
 
     # Free libcudf inputs
     free_table(c_in_table, c_in_cols)

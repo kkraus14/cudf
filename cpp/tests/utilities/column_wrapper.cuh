@@ -51,19 +51,17 @@
 namespace {
 
 gdf_dtype_extra_info copy_extra_info(gdf_column const& column) {
-  gdf_dtype_extra_info extra_info;
-  extra_info.time_unit = column.dtype_info.time_unit;
-  extra_info.category = column.dtype_info.category;
+  gdf_dtype_extra_info extra_info = column.dtype_info;
 
   // make a copy of the category if there is one
   if (column.dtype_info.category != nullptr) {
     extra_info.category =
-      static_cast<NVCategory*>(column.dtype_info.category)->copy();
+        static_cast<NVCategory*>(column.dtype_info.category)->copy();
   }
   return extra_info;
 }
 
-}; // namespace
+};  // namespace
 
 namespace cudf {
 namespace test {
@@ -93,7 +91,8 @@ namespace test {
  * ```
  *  std::vector<T> values(size);
  *
- *  std::vector<gdf_valid_type> expected_bitmask(gdf_valid_allocation_size(size), 0xFF);
+ *  std::vector<gdf_valid_type>
+ *expected_bitmask(gdf_valid_allocation_size(size), 0xFF);
  *
  *  cudf::test::column_wrapper<T> const col(values, bitmask);
  * ```
@@ -135,6 +134,15 @@ namespace test {
 template <typename ColumnType>
 struct column_wrapper {
   /**---------------------------------------------------------------------------*
+   * @brief Default constructor initializes an empty gdf_column with proper
+   * dtype
+   *
+   *---------------------------------------------------------------------------**/
+  column_wrapper() : the_column{} {
+    the_column.dtype = cudf::gdf_dtype_of<ColumnType>();
+  }
+
+  /**---------------------------------------------------------------------------*
    * @brief Copy constructor copies from another column_wrapper of the same
    * type.
    *
@@ -151,11 +159,12 @@ struct column_wrapper {
 
   // column data and bitmask destroyed by device_vector dtor
   ~column_wrapper() {
-    if (nullptr != the_column.dtype_info.category) {
-      NVCategory::destroy(
-        reinterpret_cast<NVCategory*>(the_column.dtype_info.category)
-      );
-      the_column.dtype_info.category = 0;
+    if (std::is_same<ColumnType, cudf::nvstring_category>::value) {
+      if (nullptr != the_column.dtype_info.category) {
+        NVCategory::destroy(
+            reinterpret_cast<NVCategory*>(the_column.dtype_info.category));
+        the_column.dtype_info.category = 0;
+      }
     }
   }
 
@@ -255,7 +264,7 @@ struct column_wrapper {
    *
    * @param host_data The vector of data to use for the column
    *---------------------------------------------------------------------------**/
-  explicit column_wrapper(std::vector<ColumnType> const& host_data) {
+  column_wrapper(std::vector<ColumnType> const& host_data) {
     initialize_with_host_data(host_data);
   }
 
@@ -267,7 +276,7 @@ struct column_wrapper {
    *
    * @param list initializer_list to use for column's data
    *---------------------------------------------------------------------------**/
-  explicit column_wrapper(std::initializer_list<ColumnType> list)
+  column_wrapper(std::initializer_list<ColumnType> list)
       : column_wrapper{std::vector<ColumnType>(list)} {}
 
   /**---------------------------------------------------------------------------*
@@ -279,11 +288,17 @@ struct column_wrapper {
    *
    * @param column The gdf_column* that contains the originating data
    *---------------------------------------------------------------------------**/
-  column_wrapper(const gdf_column& column)
-      : data(static_cast<ColumnType*>(column.data),
-             static_cast<ColumnType*>(column.data) + column.size) {
+  column_wrapper(const gdf_column& column) {
     CUDF_EXPECTS(gdf_dtype_of<ColumnType>() == column.dtype,
-                 "data types do not match");
+                 "Type mismatch between column_wrapper and gdf_column");
+
+    if (column.data != nullptr) {
+      // Using device_vector::assign causes a segfault on CentOS7 when trying to
+      // assign `wrapper` types. This is a workaround
+      data.resize(column.size);
+      CUDA_TRY(cudaMemcpy(data.data().get(), column.data,
+                          sizeof(ColumnType) * column.size, cudaMemcpyDefault));
+    }
 
     if (column.valid != nullptr) {
       bitmask.assign(column.valid,
@@ -403,7 +418,7 @@ struct column_wrapper {
                  char const ** string_values) {
     // Initialize the values and bitmask using the initializers
     std::vector<ColumnType> host_data(column_size);
-    
+
     NVCategory* category = NVCategory::create_from_array(string_values,
                                                          column_size);
     gdf_nvstring_category *category_data = new gdf_nvstring_category[column_size];
@@ -414,7 +429,7 @@ struct column_wrapper {
     }
     initialize_with_host_data(host_data);
     the_column.dtype_info.category = category;
-    delete [] category_data;
+    delete[] category_data;
   }
 
   /**---------------------------------------------------------------------------*
@@ -458,7 +473,7 @@ struct column_wrapper {
     }
     initialize_with_host_data(host_data, host_bitmask);
     the_column.dtype_info.category = category;
-    delete [] category_data;
+    delete[] category_data;
   }
 
   /**---------------------------------------------------------------------------*
@@ -487,7 +502,8 @@ struct column_wrapper {
     std::vector<gdf_valid_type> host_bitmask;
 
     if (nullptr != the_column.data) {
-      // TODO Is there a nicer way to get a `std::vector` from a device_vector?
+      // TODO Is there a nicer way to get a `std::vector` from a
+      // device_vector?
       host_data.resize(the_column.size);
       CUDA_RT_CALL(cudaMemcpy(host_data.data(), the_column.data,
                               the_column.size * sizeof(ColumnType),
@@ -509,12 +525,22 @@ struct column_wrapper {
    *
    *---------------------------------------------------------------------------**/
   void print() const {
-    // TODO Move the implementation of `print_gdf_column` here once it's removed
-    // from usage elsewhere
+    // TODO Move the implementation of `print_gdf_column` here once it's
+    // removed from usage elsewhere
     print_gdf_column(&the_column);
   }
 
   gdf_size_type size() const { return the_column.size; }
+
+  /**---------------------------------------------------------------------------*
+   * @brief Prints the values of the underlying gdf_column to a string
+   * 
+   *---------------------------------------------------------------------------**/
+  std::string to_str() const {
+    std::ostringstream buffer;
+    print_gdf_column(&the_column, 1, buffer);
+    return buffer.str();
+  }
 
   /**---------------------------------------------------------------------------*
    * @brief Compares this wrapper to a gdf_column for equality.
@@ -542,6 +568,16 @@ struct column_wrapper {
     return *this == *rhs.get();
   }
 
+  rmm::device_vector<ColumnType>& get_data() { return data; }
+
+  rmm::device_vector<ColumnType> const& get_data() const { return data; }
+
+  rmm::device_vector<gdf_valid_type>& get_bitmask() { return bitmask; }
+
+  rmm::device_vector<gdf_valid_type> const& get_bitmask() const {
+    return bitmask;
+  }
+
  private:
   /**---------------------------------------------------------------------------*
    * @brief Allocates and initializes the underyling gdf_column with host data.
@@ -566,9 +602,7 @@ struct column_wrapper {
     the_column.data = data.data().get();
     the_column.size = data.size();
     the_column.dtype = cudf::gdf_dtype_of<ColumnType>();
-    gdf_dtype_extra_info extra_info;
-    extra_info.time_unit = TIME_UNIT_NONE;
-    extra_info.category = nullptr;
+    gdf_dtype_extra_info extra_info{TIME_UNIT_NONE};
     the_column.dtype_info = extra_info;
 
     // If a validity bitmask vector was passed in, allocate device storage
@@ -589,12 +623,12 @@ struct column_wrapper {
     set_null_count(the_column);
   }
 
-  rmm::device_vector<ColumnType> data;  ///< Container for the column's data
+  rmm::device_vector<ColumnType> data{};  ///< Container for the column's data
 
   // If the column's bitmask does not exist (doesn't contain null values), then
   // the size of this vector will be zero
   rmm::device_vector<gdf_valid_type>
-      bitmask;  ///< Container for the column's bitmask
+      bitmask{};  ///< Container for the column's bitmask
 
   gdf_column the_column{};
 };

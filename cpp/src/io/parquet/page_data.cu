@@ -38,9 +38,10 @@ inline __device__ uint32_t rotl32(uint32_t x, uint32_t r)
     return __funnelshift_l(x, x, r);    // (x << r) | (x >> (32 - r));
 };
 
-
-namespace parquet { namespace gpu {
-
+namespace cudf {
+namespace io {
+namespace parquet {
+namespace gpu {
 
 struct page_state_s {
     const uint8_t *lvl_start[2];  // [def,rep]
@@ -259,7 +260,8 @@ __device__ void gpuDecodeLevels(page_state_s *s, int32_t target_count, int t)
     int32_t coded_count = s->nz_count;      // Count of non-null values
     while (coded_count < target_count && value_count < num_values)
     {
-        int batch_len, is_valid, valid_mask;
+        int batch_len, is_valid;
+        uint32_t valid_mask;
         if (def_run <= 1)
         {
             // Get a new run symbol from the byte stream
@@ -1281,4 +1283,7 @@ cudaError_t __host__ DecodePageData(PageInfo *pages, int32_t num_pages,
   return cudaSuccess;
 }
 
-}; }; // parquet::gpu namespace
+} // namespace gpu
+} // namespace parquet
+} // namespace io
+} // namespace cudf

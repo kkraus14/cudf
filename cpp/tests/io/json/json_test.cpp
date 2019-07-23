@@ -32,56 +32,16 @@
 
 #include <nvstrings/NVStrings.h>
 
+#include <tests/io/io_test_utils.hpp>
 #include <io/utilities/parsing_utils.cuh>
 #include <tests/utilities/cudf_test_fixtures.h>
 
-using cudf::json_reader_args;
-using cudf::JsonReader;
 using std::string;
 using std::vector;
 
 TempDirTestEnvironment *const temp_env =
     static_cast<TempDirTestEnvironment *>(::testing::AddGlobalTestEnvironment(new TempDirTestEnvironment));
 struct gdf_json_test : GdfTest {};
-
-bool checkFile(std::string fname) {
-  struct stat st;
-  return (stat(fname.c_str(), &st) ? 0 : 1);
-}
-
-template <typename T> std::vector<T> gdf_column_to_host(gdf_column const *col) {
-  std::vector<T> m_hostdata(col->size);
-  cudaMemcpy(m_hostdata.data(), col->data, sizeof(T) * col->size, cudaMemcpyDeviceToHost);
-  return m_hostdata;
-}
-
-void checkStrColumn(gdf_column const *col, vector<string> refs) {
-  ASSERT_EQ(col->dtype, GDF_STRING);
-
-  const auto stringList = reinterpret_cast<NVStrings *>(col->data);
-  ASSERT_NE(stringList, nullptr);
-
-  const auto count = stringList->size();
-  ASSERT_EQ(count, refs.size());
-
-  std::vector<int> lengths(count);
-  ASSERT_NE(stringList->byte_count(lengths.data(), false), 0u);
-
-  // Check the actual strings themselves
-  std::vector<char *> strings(count);
-  for (size_t i = 0; i < count; ++i) {
-    strings[i] = new char[lengths[i] + 1];
-    strings[i][lengths[i]] = 0;
-  }
-  EXPECT_EQ(stringList->to_host(strings.data(), 0, count), 0);
-
-  for (size_t i = 0; i < count; ++i) {
-    EXPECT_STREQ(strings[i], refs[i].c_str());
-  }
-  for (size_t i = 0; i < count; ++i) {
-    delete[] strings[i];
-  }
-}
 
 TEST_F(gdf_json_test, SquareBrackets) {
   const string json_file("{columns\":[\"col 1\",\"col 2\",\"col 3\"] , "
@@ -131,11 +91,13 @@ TEST_F(gdf_json_test, BracketsLevels) {
 }
 
 TEST_F(gdf_json_test, BasicJsonLines) {
-  json_reader_args args(HOST_BUFFER, "[1, 1.1]\n[2, 2.2]\n[3, 3.3]\n");
+  std::string data = "[1, 1.1]\n[2, 2.2]\n[3, 3.3]\n";
+
+  cudf::json_read_arg args(cudf::source_info(data.c_str(), data.size()));
   args.lines = true;
   args.dtype = {"int", "float64"};
 
-  const cudf::table df = cudf::JsonReader(args).read();
+  const auto df = cudf::read_json(args);
 
   ASSERT_EQ(df.num_columns(), 2);
   ASSERT_EQ(df.num_rows(), 3);
@@ -146,18 +108,18 @@ TEST_F(gdf_json_test, BasicJsonLines) {
   ASSERT_EQ(std::string(df.get_column(0)->col_name), "0");
   ASSERT_EQ(std::string(df.get_column(1)->col_name), "1");
 
-  const auto firstCol = gdf_column_to_host<int32_t>(df.get_column(0));
-  EXPECT_THAT(firstCol, ::testing::ElementsAre(1, 2, 3));
-  const auto secondCol = gdf_column_to_host<double>(df.get_column(1));
-  EXPECT_THAT(secondCol, ::testing::ElementsAre(1.1, 2.2, 3.3));
+  EXPECT_THAT(gdf_host_column<int32_t>(df.get_column(0)).hostdata(), ::testing::ElementsAre(1, 2, 3));
+  EXPECT_THAT(gdf_host_column<double>(df.get_column(1)).hostdata(), ::testing::ElementsAre(1.1, 2.2, 3.3));
 }
 
 TEST_F(gdf_json_test, JsonLinesStrings) {
-  json_reader_args args(HOST_BUFFER, "[1, 1.1, \"aa \"]\n[2, 2.2, \"  bbb\"]");
+  std::string data = "[1, 1.1, \"aa \"]\n[2, 2.2, \"  bbb\"]";
+
+  cudf::json_read_arg args(cudf::source_info{data.c_str(), data.size()});
   args.lines = true;
   args.dtype = {"2:str", "0:int", "1:float64"};
 
-  const cudf::table df = cudf::JsonReader(args).read();
+  const auto df = cudf::read_json(args);
 
   ASSERT_EQ(df.num_columns(), 3);
   ASSERT_EQ(df.num_rows(), 2);
@@ -169,19 +131,19 @@ TEST_F(gdf_json_test, JsonLinesStrings) {
   ASSERT_EQ(std::string(df.get_column(1)->col_name), "1");
   ASSERT_EQ(std::string(df.get_column(2)->col_name), "2");
 
-  const auto firstCol = gdf_column_to_host<int32_t>(df.get_column(0));
-  EXPECT_THAT(firstCol, ::testing::ElementsAre(1, 2));
-  const auto secondCol = gdf_column_to_host<double>(df.get_column(1));
-  EXPECT_THAT(secondCol, ::testing::ElementsAre(1.1, 2.2));
+  EXPECT_THAT(gdf_host_column<int32_t>(df.get_column(0)).hostdata(), ::testing::ElementsAre(1, 2));
+  EXPECT_THAT(gdf_host_column<double>(df.get_column(1)).hostdata(), ::testing::ElementsAre(1.1, 2.2));
 
   checkStrColumn(df.get_column(2), {"aa ", "  bbb"});
 }
 
 TEST_F(gdf_json_test, JsonLinesDtypeInference) {
-  json_reader_args args(HOST_BUFFER, "[100, 1.1, \"aa \"]\n[200, 2.2, \"  bbb\"]");
+  std::string data = "[100, 1.1, \"aa \"]\n[200, 2.2, \"  bbb\"]";
+
+  cudf::json_read_arg args(cudf::source_info{data.c_str(), data.size()});
   args.lines = true;
 
-  const cudf::table df = cudf::JsonReader(args).read();
+  const auto df = cudf::read_json(args);
 
   ASSERT_EQ(df.num_columns(), 3);
   ASSERT_EQ(df.num_rows(), 2);
@@ -193,10 +155,8 @@ TEST_F(gdf_json_test, JsonLinesDtypeInference) {
   ASSERT_EQ(std::string(df.get_column(1)->col_name), "1");
   ASSERT_EQ(std::string(df.get_column(2)->col_name), "2");
 
-  const auto firstCol = gdf_column_to_host<int64_t>(df.get_column(0));
-  EXPECT_THAT(firstCol, ::testing::ElementsAre(100, 200));
-  const auto secondCol = gdf_column_to_host<double>(df.get_column(1));
-  EXPECT_THAT(secondCol, ::testing::ElementsAre(1.1, 2.2));
+  EXPECT_THAT(gdf_host_column<int64_t>(df.get_column(0)).hostdata(), ::testing::ElementsAre(100, 200));
+  EXPECT_THAT(gdf_host_column<double>(df.get_column(1)).hostdata(), ::testing::ElementsAre(1.1, 2.2));
 
   checkStrColumn(df.get_column(2), {"aa ", "  bbb"});
 }
@@ -208,10 +168,10 @@ TEST_F(gdf_json_test, JsonLinesFileInput) {
   outfile.close();
   ASSERT_TRUE(checkFile(fname));
 
-  json_reader_args args(FILE_PATH, fname);
+  cudf::json_read_arg args(cudf::source_info{fname});
   args.lines = true;
 
-  const cudf::table df = cudf::JsonReader(args).read();
+  const auto df = cudf::read_json(args);
 
   ASSERT_EQ(df.num_columns(), 2);
   ASSERT_EQ(df.num_rows(), 2);
@@ -222,10 +182,8 @@ TEST_F(gdf_json_test, JsonLinesFileInput) {
   ASSERT_EQ(std::string(df.get_column(0)->col_name), "0");
   ASSERT_EQ(std::string(df.get_column(1)->col_name), "1");
 
-  const auto firstCol = gdf_column_to_host<int64_t>(df.get_column(0));
-  EXPECT_THAT(firstCol, ::testing::ElementsAre(11, 22));
-  const auto secondCol = gdf_column_to_host<double>(df.get_column(1));
-  EXPECT_THAT(secondCol, ::testing::ElementsAre(1.1, 2.2));
+  EXPECT_THAT(gdf_host_column<int64_t>(df.get_column(0)).hostdata(), ::testing::ElementsAre(11, 22));
+  EXPECT_THAT(gdf_host_column<double>(df.get_column(1)).hostdata(), ::testing::ElementsAre(1.1, 2.2));
 }
 
 TEST_F(gdf_json_test, JsonLinesByteRange) {
@@ -235,10 +193,12 @@ TEST_F(gdf_json_test, JsonLinesByteRange) {
   outfile.close();
   ASSERT_TRUE(checkFile(fname));
 
-  json_reader_args args(FILE_PATH, fname);
+  cudf::json_read_arg args(cudf::source_info{fname});
   args.lines = true;
+  args.byte_range_offset = 11;
+  args.byte_range_size = 20;
 
-  const cudf::table df = cudf::JsonReader(args).read_byte_range(11,20);
+  const auto df = cudf::read_json(args);
 
   ASSERT_EQ(df.num_columns(), 1);
   ASSERT_EQ(df.num_rows(), 3);
@@ -246,8 +206,7 @@ TEST_F(gdf_json_test, JsonLinesByteRange) {
   ASSERT_EQ(df.get_column(0)->dtype, GDF_INT64);
   ASSERT_EQ(std::string(df.get_column(0)->col_name), "0");
 
-  const auto firstCol = gdf_column_to_host<int64_t>(df.get_column(0));
-  EXPECT_THAT(firstCol, ::testing::ElementsAre(3000, 4000, 5000));
+  EXPECT_THAT(gdf_host_column<int64_t>(df.get_column(0)).hostdata(), ::testing::ElementsAre(3000, 4000, 5000));
 }
 
 TEST_F(gdf_json_test, JsonLinesObjects) {
@@ -257,10 +216,10 @@ TEST_F(gdf_json_test, JsonLinesObjects) {
   outfile.close();
   ASSERT_TRUE(checkFile(fname));
 
-  json_reader_args args(FILE_PATH, fname);
+  cudf::json_read_arg args(cudf::source_info{fname});
   args.lines = true;
 
-  const cudf::table df = cudf::JsonReader(args).read();
+  const auto df = cudf::read_json(args);
 
   ASSERT_EQ(df.num_columns(), 2);
   ASSERT_EQ(df.num_rows(), 1);
@@ -270,19 +229,19 @@ TEST_F(gdf_json_test, JsonLinesObjects) {
   ASSERT_EQ(df.get_column(1)->dtype, GDF_FLOAT64);
   ASSERT_EQ(std::string(df.get_column(1)->col_name), "col2");
 
-  const auto firstCol = gdf_column_to_host<int64_t>(df.get_column(0));
-  EXPECT_THAT(firstCol, ::testing::ElementsAre(1));
-
-  const auto secondCol = gdf_column_to_host<double>(df.get_column(1));
-  EXPECT_THAT(secondCol, ::testing::ElementsAre(2.0));
+  EXPECT_THAT(gdf_host_column<int64_t>(df.get_column(0)).hostdata(), ::testing::ElementsAre(1));
+  EXPECT_THAT(gdf_host_column<double>(df.get_column(1)).hostdata(), ::testing::ElementsAre(2.0));
 }
 
 TEST_F(gdf_json_test, JsonLinesObjectsStrings) {
-  json_reader_args args(HOST_BUFFER, "{\"col1\":100, \"col2\":1.1, \"col3\":\"aaa\"}\n"
-                                  "{\"col1\":200, \"col2\":2.2, \"col3\":\"bbb\"}\n");
+  std::string data =
+      "{\"col1\":100, \"col2\":1.1, \"col3\":\"aaa\"}\n"
+      "{\"col1\":200, \"col2\":2.2, \"col3\":\"bbb\"}\n";
+
+  cudf::json_read_arg args(cudf::source_info{data.c_str(), data.size()});
   args.lines = true;
 
-  const cudf::table df = cudf::JsonReader(args).read();
+  const auto df = cudf::read_json(args);
 
   ASSERT_EQ(df.num_columns(), 3);
   ASSERT_EQ(df.num_rows(), 2);
@@ -294,10 +253,8 @@ TEST_F(gdf_json_test, JsonLinesObjectsStrings) {
   ASSERT_EQ(std::string(df.get_column(1)->col_name), "col2");
   ASSERT_EQ(std::string(df.get_column(2)->col_name), "col3");
 
-  const auto firstCol = gdf_column_to_host<int64_t>(df.get_column(0));
-  EXPECT_THAT(firstCol, ::testing::ElementsAre(100, 200));
-  const auto secondCol = gdf_column_to_host<double>(df.get_column(1));
-  EXPECT_THAT(secondCol, ::testing::ElementsAre(1.1, 2.2));
+  EXPECT_THAT(gdf_host_column<int64_t>(df.get_column(0)).hostdata(), ::testing::ElementsAre(100, 200));
+  EXPECT_THAT(gdf_host_column<double>(df.get_column(1)).hostdata(), ::testing::ElementsAre(1.1, 2.2));
 
   checkStrColumn(df.get_column(2), {"aaa", "bbb"});
 }
